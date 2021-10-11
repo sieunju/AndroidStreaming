@@ -3,11 +3,15 @@ package com.hmju.streaming.caster.camera
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
+import android.os.Handler
+import android.os.Looper
+import android.util.Range
 import android.util.Size
 import android.view.Surface
 import androidx.core.content.ContextCompat
@@ -33,39 +37,12 @@ class Camera2Provider(
     private var textureView: AuthFitTextureView? = null
     private var captureRequest: CaptureRequest.Builder? = null
 
+    private val imageReaderListener = object : ImageReader.OnImageAvailableListener{
+        override fun onImageAvailable(reader: ImageReader?) {
+            if(reader == null) return
 
-
-    private val captureSessionCallback = object : CameraCaptureSession.StateCallback() {
-
-        override fun onConfigured(session: CameraCaptureSession) {
-            captureSession = session
-
-        }
-
-        override fun onConfigureFailed(session: CameraCaptureSession) {
-
-        }
-    }
-
-    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
-        /**
-         * This method is called when an image capture makes partial forward progress; some
-         * (but not all) results from an image capture are available.
-         *
-         * @see .capture
-         *
-         * @see .captureBurst
-         *
-         * @see .setRepeatingRequest
-         *
-         * @see .setRepeatingBurst
-         */
-        override fun onCaptureProgressed(
-            session: CameraCaptureSession,
-            request: CaptureRequest,
-            partialResult: CaptureResult
-        ) {
-            JLogger.d("onCaptureProgressed ${session}")
+            JLogger.d("onImageAvailable ${reader}")
+            reader.close()
         }
     }
 
@@ -119,46 +96,70 @@ class Camera2Provider(
         return null
     }
 
-
+    /**
+     * 카메라 프리뷰 시작.
+     */
     private fun showCameraPreview() {
         runCatching {
             multiNullCheck(textureView?.surfaceTexture,cameraDevice,cameraSize) { texture,camera,size ->
+                JLogger.d("showCameraPreview")
                 texture.setDefaultBufferSize(size.width, size.height)
                 val surface = Surface(texture)
-                captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+
+                val previewReader = ImageReader.newInstance(size.width,size.height,ImageFormat.YUV_420_888,2)
+                previewReader.setOnImageAvailableListener(imageReaderListener,Handler(Looper.getMainLooper()))
+
+                captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(16,30))
+                    set(CaptureRequest.CONTROL_AE_MODE,1)
+                    set(CaptureRequest.CONTROL_AE_LOCK,false)
                     addTarget(surface)
-                    set(
-                        CaptureRequest.CONTROL_MODE,
-                        CameraMetadata.CONTROL_MODE_AUTO
-                    )
                 }
+
+//                captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+//                    // addTarget(imgReader.surface)
+//                    addTarget(surface)
+//                    set(
+//                        CaptureRequest.CONTROL_MODE,
+//                        CameraMetadata.CONTROL_MODE_AUTO
+//                    )
+//                }
                 val outConfigs = arrayListOf<OutputConfiguration>()
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                     outConfigs.add(OutputConfiguration(surface))
+                    outConfigs.add(OutputConfiguration(previewReader.surface))
                 } else {
-
+                    // 버전별로 분기 처리.
                 }
 
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    cameraDevice?.createCaptureSession(
+                    camera.createCaptureSession(
                         SessionConfiguration(
                             SessionConfiguration.SESSION_REGULAR,
                             outConfigs,
                             Executors.newSingleThreadExecutor(),
                             object : CameraCaptureSession.StateCallback() {
                                 override fun onConfigured(session: CameraCaptureSession) {
+                                    JLogger.d("onConfigured $session")
                                     captureSession = session
                                     updatePreview()
                                 }
 
                                 override fun onConfigureFailed(session: CameraCaptureSession) {
-
+                                    JLogger.d("onConfigureFailed $session")
                                 }
                             }
                         )
                     )
                 } else {
-
+                    camera.createCaptureSession(listOf(surface),object : CameraCaptureSession.StateCallback(){
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            captureSession = session
+                            updatePreview()
+                        }
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                        }
+                    }, Handler(Looper.getMainLooper()))
                 }
             }
         }
