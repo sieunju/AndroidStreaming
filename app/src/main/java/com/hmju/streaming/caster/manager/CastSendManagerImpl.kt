@@ -1,5 +1,6 @@
 package com.hmju.streaming.caster.manager
 
+import androidx.camera.view.PreviewView
 import com.hmju.streaming.model.base.ReliablePacket
 import com.hmju.streaming.model.video.VideoPacket
 import io.netty.channel.socket.nio.NioDatagramChannel
@@ -11,7 +12,8 @@ import java.util.concurrent.ConcurrentHashMap
  * Created by juhongmin on 10/10/21
  */
 class CastSendManagerImpl(
-    private val clientChannel: NioDatagramChannel
+    private val clientChannel: NioDatagramChannel,
+    private val previewView: PreviewView
 ) : CastSendManager {
 
     private val videoStreamMap : ConcurrentHashMap<String,VideoPacket> by lazy { ConcurrentHashMap() }
@@ -27,11 +29,13 @@ class CastSendManagerImpl(
      * 처리하는 함수
      */
     override fun onReliablePacket(packet: ReliablePacket) {
+
     }
 
     /**
      * 메모리 해제 처리 함수.
      */
     override fun release() {
+
     }
 }

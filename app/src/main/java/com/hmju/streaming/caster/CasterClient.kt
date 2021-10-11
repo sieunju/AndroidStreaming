@@ -1,5 +1,6 @@
 package com.hmju.streaming.caster
 
+import androidx.camera.view.PreviewView
 import com.hmju.streaming.base.Client
 import com.hmju.streaming.caster.handler.CastInBoundsHandler
 import com.hmju.streaming.caster.handler.ChannelWriteHandler
@@ -23,6 +24,11 @@ import java.net.InetSocketAddress
 class CasterClient : Client() {
 
     private var sendManager: CastSendManager? = null
+    private var textureView: PreviewView? = null
+
+    fun setTextureView(view: PreviewView) {
+        textureView = view
+    }
 
     override fun setServerAddress(host: String, port: Int) {
         this.host
@@ -42,10 +48,13 @@ class CasterClient : Client() {
      * 메모리 해제 처리 함수
      */
     override fun release(): Boolean {
-        group?.shutdownGracefully()?.sync()
-        channel?.closeFuture()?.sync()
-        group = null
-        channel = null
+        group?.run {
+            shutdownGracefully().addListener {
+                channel?.closeFuture()?.sync()
+                group = null
+                channel = null
+            }
+        }
         return true
     }
 
@@ -80,7 +89,7 @@ class CasterClient : Client() {
                     override fun initChannel(ch: NioDatagramChannel?) {
                         if (ch == null) return
 
-                        sendManager = CastSendManagerImpl(ch)
+                        sendManager = CastSendManagerImpl(ch, textureView!!)
 
                         ch.pipeline().apply {
                             addFirst("control", object : ChannelInboundHandlerAdapter() {

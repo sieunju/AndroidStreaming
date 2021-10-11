@@ -60,6 +60,9 @@ dependencies {
     implementation (deps.androidx.legacy)
     implementation (deps.androidx.viewpager)
     implementation (deps.androidx.fragment)
+    implementation (deps.androidx.camera)
+    implementation (deps.androidx.cameraView)
+    implementation (deps.androidx.cameraLifecycle)
 
     implementation(deps.hilt.android)
     kapt(deps.hilt.compiler)
