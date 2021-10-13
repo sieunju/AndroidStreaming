@@ -12,6 +12,7 @@ import com.hmju.streaming.utility.JLogger
 import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.core.Scheduler
 import io.reactivex.rxjava3.disposables.Disposable
+import io.reactivex.rxjava3.flowables.ConnectableFlowable
 import io.reactivex.rxjava3.schedulers.Schedulers
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
@@ -22,19 +23,25 @@ import java.util.concurrent.TimeUnit
  * Created by juhongmin on 10/10/21
  */
 class SurfaceRenderView @JvmOverloads constructor(
-    context: Context,
-    attrs: AttributeSet? = null,
-    defStyleAttr: Int = 0
+        context: Context,
+        attrs: AttributeSet? = null,
+        defStyleAttr: Int = 0
 ) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback {
 
+    private val RENDER_DELAY = 16L
     private val surfaceHolder: SurfaceHolder by lazy { holder }
     private var viewWidth: Int = 0
     private var viewHeight: Int = 0
     private val videoStreamQue: ConcurrentLinkedQueue<String> by lazy { ConcurrentLinkedQueue<String>() }
     private var tempStreamArr: Array<String>? = null
+    private val renderPublish: ConnectableFlowable<Long> by lazy {
+        Flowable.interval(RENDER_DELAY, TimeUnit.MILLISECONDS)
+                .onBackpressureBuffer().observeOn(Schedulers.single()).publish()
+    }
+    private var renderDisposable: Disposable? = null
     private var renderObservable: Disposable? = null
     private val paint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
-    private var currentTime : Long = 0
+    private var currentTime: Long = 0
 
     init {
         setZOrderOnTop(true)
@@ -43,52 +50,62 @@ class SurfaceRenderView @JvmOverloads constructor(
             setFormat(PixelFormat.TRANSPARENT)
         }
 
-        if(isInEditMode) {
+        if (isInEditMode) {
             setBackgroundColor(Color.BLACK)
         }
     }
 
-    fun startRender(){
-        if(renderObservable != null) return
+    /**
+     * 메모리 해제 및 쓰레드 동작 해제 처리함수.
+     */
+    private fun release() {
+        if (renderDisposable != null) {
+            renderDisposable?.dispose()
+            renderDisposable = null
+        }
 
-        renderObservable = Flowable.interval(16,TimeUnit.MILLISECONDS, Schedulers.single())
-            .onBackpressureBuffer()
-            .map {
-                return@map if(videoStreamQue.size > 0) {
-                    videoStreamQue.poll()
-                } else {
-                    ""
-                }
-            }.subscribe({ videoSource ->
-                if (!videoSource.isNullOrEmpty()) {
-                    try {
-                        val decodedByte = Base64.decode(videoSource, Base64.NO_WRAP)
-                        val bitmap = BitmapFactory.decodeByteArray(decodedByte, 0, decodedByte.size)
-                        val resizeBitmap =
-                            Bitmap.createScaledBitmap(bitmap, viewWidth, viewWidth, true)
-                        if (resizeBitmap != null) {
-                            val canvas = surfaceHolder.lockCanvas()
-                            try {
-                                JLogger.d("캡처를 그립니다. ${resizeBitmap.rowBytes}")
-                                canvas.drawBitmap(resizeBitmap, 0F, 0F, paint)
-                                resizeBitmap.recycle()
-                                bitmap.recycle()
-                            } catch (ex: Exception) {
-                                JLogger.e("여기서????? ${ex}")
-                            } finally {
-                                surfaceHolder.unlockCanvasAndPost(canvas)
-                            }
-                        }
-                    } catch (ex : Exception) {
-                        JLogger.e("비트맵 만드는 도중 에러... ${ex}")
-                        // 지금까지 받은 패킷들 초기화
-                        currentTime = 0
-                        tempStreamArr = null
+        tempStreamArr = null
+    }
+
+    private fun startRender() {
+        release()
+        renderDisposable = renderPublish
+                .map {
+                    return@map if (videoStreamQue.size > 0) {
+                        videoStreamQue.poll()
+                    } else {
+                        ""
                     }
                 }
-            },{
-                JLogger.e("Flowable Error ${it}")
-            })
+                .subscribe({ videoSource ->
+                    if (videoSource.isNotEmpty()) {
+                        runCatching {
+                            val decodedByte = Base64.decode(videoSource, Base64.NO_WRAP)
+                            val bitmap = BitmapFactory.decodeByteArray(decodedByte, 0, decodedByte.size)
+                            val resizeBitmap =
+                                    Bitmap.createScaledBitmap(bitmap, viewWidth, viewWidth, true)
+                            if (resizeBitmap != null) {
+                                val canvas = surfaceHolder.lockCanvas()
+                                try {
+                                    canvas.drawBitmap(resizeBitmap, 0F, 0F, paint)
+                                } catch (ex: Exception) {
+                                    // Draw 하다가 에러 생긴 경우 받은 스트림 초기화
+                                    currentTime = 0
+                                    tempStreamArr = null
+                                    JLogger.e("DrawBitmap Error $ex")
+                                } finally {
+                                    surfaceHolder.unlockCanvasAndPost(canvas)
+                                    resizeBitmap.recycle()
+                                    bitmap.recycle()
+                                }
+                            }
+                        }.onFailure {
+                            JLogger.d("Render Error $it")
+                        }
+                    }
+                }, {
+
+                })
     }
 
     /**
@@ -100,33 +117,33 @@ class SurfaceRenderView @JvmOverloads constructor(
     fun addVideoFrame(packet: VideoPacket) {
         tempStreamArr?.let { arr ->
             if (arr.size > packet.currPos) {
-                if(arr[packet.currPos].isEmpty()) {
+                if (arr[packet.currPos].isEmpty()) {
                     arr[packet.currPos] = packet.source
                 }
             }
 
             var isFull = true
+            val strBuffer = StringBuffer()
             for (idx in arr.indices) {
+                val str = arr[idx]
                 // 하나라도 빈공간이 있는 경우
-                if (arr[idx].isEmpty()) {
+                if(str.isEmpty()) {
                     isFull = false
                     break
+                } else {
+                    strBuffer.append(str)
                 }
             }
 
             // 가득 찬경우 videoStreamQue 저장
-            if (isFull) {
-                val strBuilder = StringBuffer()
-                arr.forEach {
-                    strBuilder.append(it)
-                }
-                videoStreamQue.offer(strBuilder.toString())
+            if(isFull) {
+                videoStreamQue.offer(strBuffer.toString())
                 // 비디오 스트림 초기화.
                 tempStreamArr = null
                 JLogger.d(" 스트림 사이즈 ${videoStreamQue.size}")
             }
         } ?: run {
-            if(currentTime != packet.time) {
+            if (currentTime != packet.time) {
                 JLogger.d("새로운 스트림을 받습니다. ${packet.time} ${packet.reliableUid}")
                 tempStreamArr = Array(packet.maxSize) {
                     if (it == packet.currPos) {
@@ -172,9 +189,8 @@ class SurfaceRenderView @JvmOverloads constructor(
      */
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         try {
-            renderObservable?.dispose()
-            renderObservable = null
-        } catch (ex : Exception) {
+            release()
+        } catch (ex: Exception) {
 
         }
     }
