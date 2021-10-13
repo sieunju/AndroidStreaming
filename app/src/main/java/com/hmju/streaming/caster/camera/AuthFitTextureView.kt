@@ -14,4 +14,5 @@ class AuthFitTextureView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : TextureView(context, attrs, defStyleAttr){
+
 }
