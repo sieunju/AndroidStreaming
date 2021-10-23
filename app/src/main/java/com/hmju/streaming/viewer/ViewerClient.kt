@@ -83,8 +83,6 @@ class ViewerClient : Client(), OnReceiveMessage {
                     override fun initChannel(ch: NioDatagramChannel?) {
                         if (ch == null) return
 
-
-
                         ch.pipeline().apply {
                             addFirst("control", object : ChannelInboundHandlerAdapter() {
                                 /**
